@@ -1,0 +1,464 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, signInAnonymously } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot, query, where } from 'firebase/firestore';
+
+// Component for the Owner's Dashboard
+const OwnerDashboard = ({ loading, records, onBack }) => {
+  return (
+    <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-lg">
+      <h2 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mb-4 text-center">
+        سجلات الأعطال (لوحة الإدارة)
+      </h2>
+      <button
+        onClick={onBack}
+        className="mb-4 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition duration-200"
+      >
+        &#8594; العودة
+      </button>
+      {loading ? (
+        <div className="flex justify-center items-center h-48">
+          <div className="w-12 h-12 border-4 border-blue-500 border-solid rounded-full border-t-transparent animate-spin"></div>
+        </div>
+      ) : records.length > 0 ? (
+        <div className="space-y-4">
+          {records.map((record) => (
+            <div key={record.id} className="bg-gray-100 dark:bg-gray-700 p-4 rounded-xl shadow-md border-b border-gray-300 dark:border-gray-600">
+              <p className="text-lg font-bold text-blue-600 dark:text-blue-400">
+                <span className="font-semibold text-gray-700 dark:text-gray-300">العميل:</span> {record.customerName}
+              </p>
+              <p className="text-gray-600 dark:text-gray-400">
+                <span className="font-semibold text-gray-700 dark:text-gray-300">الهاتف:</span> {record.phoneNumber}
+              </p>
+              <p className="text-gray-600 dark:text-gray-400">
+                <span className="font-semibold text-gray-700 dark:text-gray-300">السيارة:</span> {record.carMake} - {record.carModel}
+              </p>
+              <p className="text-gray-600 dark:text-gray-400">
+                <span className="font-semibold text-gray-700 dark:text-gray-300">اللوحة:</span> {record.carPlateNumber}
+              </p>
+              <p className="text-gray-600 dark:text-gray-400">
+                <span className="font-semibold text-gray-700 dark:text-gray-300">الوصف:</span> {record.faultDescription}
+              </p>
+              {record.faultImage && (
+                <div className="mt-4">
+                  <img src={record.faultImage} alt="صورة العطل" className="w-full rounded-xl object-cover border border-gray-300 dark:border-gray-600 shadow-sm" />
+                </div>
+              )}
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                <span className="font-semibold text-gray-700 dark:text-gray-300">التاريخ:</span> {new Date(record.date).toLocaleDateString('ar-SA')}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-center text-gray-500 dark:text-gray-400">
+          لا توجد سجلات محفوظة حاليًا.
+        </p>
+      )}
+    </div>
+  );
+};
+
+// Component for the Customer Submission Form
+const CustomerSubmissionForm = ({ db, ownerId, loading, setLoading, onBack }) => {
+  const [customerName, setCustomerName] = useState('');
+  const [carMake, setCarMake] = useState('');
+  const [carModel, setCarModel] = useState('');
+  const [carPlateNumber, setCarPlateNumber] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [faultDescription, setFaultDescription] = useState('');
+  const [faultImage, setFaultImage] = useState(null);
+
+  const handleImageChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFaultImage(reader.result);
+      };
+      reader.onerror = (error) => {
+        console.error("Error reading file:", error);
+        setFaultImage(null);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!customerName || !carMake || !carModel || !carPlateNumber || !phoneNumber || !faultDescription) {
+      alert('الرجاء تعبئة جميع الحقول المطلوبة.');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      if (!db || !ownerId) {
+        console.error("Firestore database or Owner ID is not available.");
+        setLoading(false);
+        return;
+      }
+      
+      const recordsCollectionRef = collection(db, `artifacts/${__app_id}/public/data/customer_submissions`);
+      await addDoc(recordsCollectionRef, {
+        customerName,
+        carMake,
+        carModel,
+        carPlateNumber,
+        phoneNumber,
+        faultDescription,
+        faultImage,
+        date: new Date().toISOString(),
+        ownerId: ownerId, // Store the owner's app ID with the record
+      });
+
+      // Clear the form fields after successful submission
+      setCustomerName('');
+      setCarMake('');
+      setCarModel('');
+      setCarPlateNumber('');
+      setPhoneNumber('');
+      setFaultDescription('');
+      setFaultImage(null);
+      console.log("New record submitted successfully.");
+      alert('تم إرسال السجل بنجاح!');
+    } catch (error) {
+      console.error("Error adding document: ", error);
+      const errorMessage = "حدث خطأ أثناء إضافة السجل. يرجى المحاولة مرة أخرى.";
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50';
+      errorDiv.innerHTML = `
+        <div class="bg-white p-6 rounded-lg shadow-lg text-center">
+          <p class="text-lg font-bold text-red-600">${errorMessage}</p>
+          <button onclick="this.parentElement.parentElement.remove()" class="mt-4 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600">إغلاق</button>
+        </div>
+      `;
+      document.body.appendChild(errorDiv);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-lg mb-8">
+      <h2 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mb-4 text-center">
+        إضافة سجل جديد (للعملاء)
+      </h2>
+      <button
+        onClick={onBack}
+        className="mb-4 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition duration-200"
+      >
+        &#8594; العودة
+      </button>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label htmlFor="customerName" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            اسم العميل
+          </label>
+          <input
+            type="text"
+            id="customerName"
+            value={customerName}
+            onChange={(e) => setCustomerName(e.target.value)}
+            required
+            className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+          />
+        </div>
+        <div>
+          <label htmlFor="phoneNumber" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            رقم الهاتف
+          </label>
+          <input
+            type="tel"
+            id="phoneNumber"
+            value={phoneNumber}
+            onChange={(e) => setPhoneNumber(e.target.value)}
+            required
+            className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+          />
+        </div>
+        <div>
+          <label htmlFor="carMake" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            نوع السيارة (ياباني)
+          </label>
+          <select
+            id="carMake"
+            value={carMake}
+            onChange={(e) => setCarMake(e.target.value)}
+            required
+            className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+          >
+            <option value="">اختر النوع</option>
+            <option value="Toyota">تويوتا</option>
+            <option value="Honda">هوندا</option>
+            <option value="Nissan">نيسان</option>
+            <option value="Mazda">مازدا</option>
+            <option value="Subaru">سوبارو</option>
+            <option value="Mitsubishi">ميتسوبيشي</option>
+            <option value="Suzuki">سوزوكي</option>
+          </select>
+        </div>
+        <div>
+          <label htmlFor="carModel" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            موديل السيارة
+          </label>
+          <input
+            type="text"
+            id="carModel"
+            value={carModel}
+            onChange={(e) => setCarModel(e.target.value)}
+            required
+            className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+          />
+        </div>
+        <div>
+          <label htmlFor="carPlateNumber" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            رقم لوحة السيارة
+          </label>
+          <input
+            type="text"
+            id="carPlateNumber"
+            value={carPlateNumber}
+            onChange={(e) => setCarPlateNumber(e.target.value)}
+            required
+            className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+          />
+        </div>
+        <div>
+          <label htmlFor="faultDescription" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            وصف العطل
+          </label>
+          <textarea
+            id="faultDescription"
+            value={faultDescription}
+            onChange={(e) => setFaultDescription(e.target.value)}
+            required
+            rows="4"
+            className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+          ></textarea>
+        </div>
+        <div>
+          <label htmlFor="faultImage" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            صورة العطل
+          </label>
+          <input
+            type="file"
+            id="faultImage"
+            accept="image/*"
+            onChange={handleImageChange}
+            className="mt-1 block w-full rounded-lg p-2 border dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+          />
+        </div>
+        <button
+          type="submit"
+          className="w-full py-2 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition duration-200 ease-in-out"
+        >
+          إرسال السجل
+        </button>
+      </form>
+    </div>
+  );
+};
+
+// Main App Component
+const App = () => {
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState('chooser'); // 'chooser', 'login', 'owner', 'customer'
+  const [accessCode, setAccessCode] = useState('');
+  
+  // The owner's specific access code
+  const OWNER_ACCESS_CODE = 'خدمات الانوار79';
+
+  // Initialize Firebase and set up authentication
+  useEffect(() => {
+    const initializeFirebase = async () => {
+      try {
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+
+        if (Object.keys(firebaseConfig).length === 0) {
+          console.error("Firebase config is not available.");
+          setLoading(false);
+          return;
+        }
+
+        const app = initializeApp(firebaseConfig);
+        const firestore = getFirestore(app);
+        const firebaseAuth = getAuth(app);
+
+        setDb(firestore);
+        setAuth(firebaseAuth);
+
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        if (initialAuthToken) {
+          await signInWithCustomToken(firebaseAuth, initialAuthToken);
+        } else {
+          await signInAnonymously(firebaseAuth);
+        }
+        
+        firebaseAuth.onAuthStateChanged(user => {
+          if (user) {
+            setUserId(user.uid);
+          }
+          setLoading(false);
+        });
+
+      } catch (error) {
+        console.error("Error initializing Firebase:", error);
+        setLoading(false);
+      }
+    };
+
+    initializeFirebase();
+  }, []);
+
+  // Fetch records only for the owner after successful login
+  useEffect(() => {
+    if (db && userId && view === 'owner') {
+      const fetchRecords = () => {
+        try {
+          // Use the app ID as the owner's ID to fetch all public submissions
+          const ownerId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+          const recordsCollectionRef = collection(db, `artifacts/${ownerId}/public/data/customer_submissions`);
+          const q = query(recordsCollectionRef, where('ownerId', '==', ownerId));
+          
+          const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            const newRecords = [];
+            querySnapshot.forEach((doc) => {
+              newRecords.push({ id: doc.id, ...doc.data() });
+            });
+            setRecords(newRecords);
+            setLoading(false);
+            console.log("Records updated from Firestore.");
+          }, (error) => {
+              console.error("Error fetching records with onSnapshot:", error);
+              setLoading(false);
+          });
+          return unsubscribe;
+        } catch (error) {
+          console.error("Error setting up records listener:", error);
+          setLoading(false);
+        }
+      };
+      const unsubscribe = fetchRecords();
+      return () => {
+        if (unsubscribe) unsubscribe();
+      };
+    }
+  }, [db, userId, view]);
+
+  // Handle access code submission
+  const handleLoginSubmit = (e) => {
+    e.preventDefault();
+    if (accessCode === OWNER_ACCESS_CODE) {
+      setView('owner');
+    } else {
+      // Use a custom message box instead of alert()
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50';
+      errorDiv.innerHTML = `
+        <div class="bg-white p-6 rounded-lg shadow-lg text-center">
+          <p class="text-lg font-bold text-red-600">الرمز خاطئ. يرجى المحاولة مرة أخرى.</p>
+          <button onclick="this.parentElement.parentElement.remove()" class="mt-4 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600">إغلاق</button>
+        </div>
+      `;
+      document.body.appendChild(errorDiv);
+      setAccessCode('');
+    }
+  };
+
+  // Render the appropriate view based on state
+  const renderView = () => {
+    const ownerId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    switch (view) {
+      case 'chooser':
+        return (
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-lg mb-8 text-center">
+            <h2 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mb-4">
+              أهلاً بك في خدمات الأنوار
+            </h2>
+            <div className="space-y-4">
+              <button
+                onClick={() => setView('customer')}
+                className="w-full py-3 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition duration-200 ease-in-out"
+              >
+                عميل جديد (إرسال سجل)
+              </button>
+              <button
+                onClick={() => setView('login')}
+                className="w-full py-3 px-4 rounded-lg bg-green-600 hover:bg-green-700 text-white font-semibold transition duration-200 ease-in-out"
+              >
+                المالك (تسجيل الدخول)
+              </button>
+            </div>
+          </div>
+        );
+      case 'login':
+        return (
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-lg mb-8 text-center">
+            <h2 className="text-2xl font-semibold text-gray-800 dark:text-gray-200 mb-4">
+              تسجيل الدخول كمالك
+            </h2>
+            <form onSubmit={handleLoginSubmit} className="space-y-4">
+              <div>
+                <label htmlFor="accessCode" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  أدخل رمز الإدارة
+                </label>
+                <input
+                  type="password"
+                  id="accessCode"
+                  value={accessCode}
+                  onChange={(e) => setAccessCode(e.target.value)}
+                  required
+                  className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 text-center"
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full py-2 px-4 rounded-lg bg-green-600 hover:bg-green-700 text-white font-semibold transition duration-200 ease-in-out"
+              >
+                دخول
+              </button>
+            </form>
+            <button
+              onClick={() => setView('chooser')}
+              className="mt-4 text-gray-600 dark:text-gray-400 hover:underline"
+            >
+              &#8594; العودة
+            </button>
+          </div>
+        );
+      case 'owner':
+        return <OwnerDashboard db={db} userId={userId} loading={loading} records={records} onBack={() => setView('chooser')} />;
+      case 'customer':
+        return <CustomerSubmissionForm db={db} ownerId={ownerId} loading={loading} setLoading={setLoading} onBack={() => setView('chooser')} />;
+      default:
+        return null;
+    }
+  };
+  
+  return (
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-900 p-4 font-sans text-right">
+      <div className="container mx-auto max-w-2xl">
+        <h1 className="text-3xl font-bold text-blue-600 dark:text-blue-400 mb-6 text-center">
+          خدمات الأنوار
+        </h1>
+        {userId && (
+          <div className="bg-gray-200 dark:bg-gray-800 p-3 rounded-xl shadow-md mb-4 text-sm break-words">
+            <p className="text-gray-700 dark:text-gray-300">
+              <strong className="text-blue-600 dark:text-blue-400">معرف المستخدم:</strong> {userId}
+            </p>
+          </div>
+        )}
+        {renderView()}
+      </div>
+    </div>
+  );
+};
+
+export default App;
